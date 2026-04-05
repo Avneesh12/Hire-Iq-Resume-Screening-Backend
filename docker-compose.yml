@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: resume-screening-api:latest
+    container_name: resume_screening_api
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_DIR: ml_/saved_models
+      LOG_LEVEL: INFO
+      PORT: 8000
+    volumes:
+      # Mount saved models from host (avoids rebuilding image when models change)
+      - ./ml_/saved_models:/app/ml_/saved_models:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Optional: Swagger UI proxy (useful for local dev) ──────────────────────
+  # Uncomment if you want a standalone Swagger UI at http://localhost:8080
+  # swagger-ui:
+  #   image: swaggerapi/swagger-ui
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     API_URL: http://api:8000/openapi.json
+  #   depends_on:
+  #     - api
