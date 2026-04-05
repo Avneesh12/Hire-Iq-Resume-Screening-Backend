@@ -43,6 +43,15 @@ app.add_middleware(
 app.include_router(resume_router, prefix="/api/v1")
 
 
+@app.get("/", tags=["Root"], summary="Root endpoint")
+async def root():
+    return {
+        "message": "Welcome to Resume Screening API 🚀",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health", tags=["Health"], summary="Health check")
 async def health() -> dict:
