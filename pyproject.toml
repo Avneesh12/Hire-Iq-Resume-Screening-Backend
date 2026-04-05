@@ -3,7 +3,7 @@ name = "resume-screening"
 version = "1.0.0"
 description = "Resume screening API using TF-IDF and BiLSTM ensemble models."
 readme = "README.md"
-requires-python = "3.11.9"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.29.0",
