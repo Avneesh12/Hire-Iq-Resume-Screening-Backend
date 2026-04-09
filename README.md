@@ -1,180 +1,193 @@
-# Resume Screening API
+# HireIQ Backend — Fixed & Production-Ready
 
-A FastAPI service that predicts the most suitable job role from resume text using a **TF-IDF + BiLSTM ensemble** model. Upload a PDF, DOCX, or plain-text resume and receive a predicted role, confidence score, top-3 matches, and extracted skills.
-
----
-
-## Project Structure
-
-```
-resume_screening/
-├── app/                        # FastAPI application
-│   ├── main.py                 # App entry point, lifespan, CORS
-│   ├── core/
-│   │   ├── config.py           # Settings (env-configurable)
-│   │   ├── logger.py           # Centralised logging
-│   │   └── security.py         # Auth stub (extend as needed)
-│   ├── api/
-│   │   ├── routes/
-│   │   │   └── resume.py       # POST /screen and /screen/upload
-│   │   ├── schemas/
-│   │   │   └── resume.py       # Pydantic request/response models
-│   │   └── dependencies/
-│   │       └── models.py       # FastAPI dependency for ML models
-│   ├── services/
-│   │   ├── resume_parser.py    # PDF / DOCX / TXT text extraction
-│   │   ├── skill_extractor.py  # Keyword-based skill detection
-│   │   └── matcher.py          # Skill coverage scorer
-│   └── utils/
-│       ├── text.py             # Text cleaning / normalisation
-│       └── file_handler.py     # Upload validation helper
-├── ml/                         # ML inference layer
-│   ├── loader.py               # Model loading & caching
-│   └── predictor.py            # Ensemble prediction logic
-├── ml_/                        # Training artefacts (not shipped in Docker)
-│   ├── datasets/               # resume_dataset.csv
-│   ├── saved_models/           # .pkl and .keras model files
-│   └── training/               # Training scripts
-├── tests/
-│   └── test_api.py             # Pytest test suite
-├── Dockerfile                  # Multi-stage production build
-├── docker-compose.yml          # Local orchestration
-├── .dockerignore
-├── .gitignore
-└── requirements.txt
-```
+FastAPI + PostgreSQL + Redis resume screening API.
+All routes are aligned to the frontend's `lib/api.ts` contract.
 
 ---
 
-## Quickstart
+## Quick Start
 
-### 1 — Local (without Docker)
+### 1. Prerequisites
+- Python 3.11+
+- PostgreSQL 14+
+- Redis 7+
+
+Or just use Docker Compose (recommended):
 
 ```bash
-# Clone and enter the project
-git clone <your-repo-url>
-cd resume_screening
+docker compose up -d db redis
+```
 
-# Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
+### 2. Install dependencies
 
-# Install dependencies
+```bash
 pip install -r requirements.txt
-
-# Run the API
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open **http://localhost:8000/docs** for the interactive Swagger UI.
-
-### 2 — Docker
+### 3. Configure environment
 
 ```bash
-# Build and start
-docker compose up --build
+cp .env.example .env
+# Edit .env — set DATABASE_URL, REDIS_URL, and SECRET_KEY at minimum
+```
 
-# Run in background
-docker compose up -d
+### 4. Run database migrations
 
-# Stop
-docker compose down
+```bash
+alembic upgrade head
+```
+
+### 5. Start the API
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+API is live at `http://localhost:8000`.  
+Swagger docs at `http://localhost:8000/docs`.
+
+### 6. (Optional) Start Celery worker for background resume processing
+
+Without Celery, resumes are processed inline (synchronous) — fine for dev.  
+For production, run the worker:
+
+```bash
+celery -A app.workers.resume_processor worker --loglevel=info --concurrency=4
 ```
 
 ---
 
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Service health check |
-| `POST` | `/api/v1/resume/screen` | Screen resume from plain text |
-| `POST` | `/api/v1/resume/screen/upload` | Screen resume from file upload |
-
-### Example — Text Screening
+## Full Docker Compose (API + DB + Redis + Worker)
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/resume/screen \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Experienced ML engineer with 5 years in Python, TensorFlow, and AWS..."
-  }'
+docker compose up --build
 ```
 
-**Response:**
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://hireiq:hireiq_pass@localhost:5432/hireiq` | Async PostgreSQL URL |
+| `SYNC_DATABASE_URL` | `postgresql://hireiq:hireiq_pass@localhost:5432/hireiq` | Sync URL for Alembic |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
+| `SECRET_KEY` | *(required)* | JWT signing key — use a long random string |
+| `ENV` | `development` | Set to `production` to tighten CORS + hide docs |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT expiry |
+| `MAX_UPLOAD_SIZE_MB` | `10` | Per-file upload limit |
+| `MAX_BATCH_FILES` | `50` | Max files per upload batch |
+
+---
+
+## API Routes
+
+All routes are under `/api/v1`.
+
+### Auth
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/auth/register` | Register new user |
+| `POST` | `/auth/login` | Login → JWT token |
+| `GET` | `/auth/me` | Current user |
+| `PATCH` | `/auth/me` | Update name/email |
+| `POST` | `/auth/change-password` | Change password |
+| `POST` | `/auth/logout` | Logout |
+| `POST` | `/auth/forgot-password` | Request reset link |
+
+### Candidates
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/candidates` | List with filters: `search`, `status`, `job_id`, `min_score`, `max_score`, `sort_by`, `sort_order`, `page`, `page_size` |
+| `GET` | `/candidates/:id` | Get single candidate |
+| `PATCH` | `/candidates/:id/status` | Update status |
+| `POST` | `/candidates/:id/notes` | Add recruiter note |
+| `GET` | `/candidates/:id/score` | Get ML score |
+| `PATCH` | `/candidates/bulk-status` | Bulk status update |
+
+### Resumes / Uploads
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/resumes/upload` | Upload resume files (multipart: `files[]`, optional `job_id`) |
+| `GET` | `/resumes/batches` | List upload batches |
+| `GET` | `/resumes/batches/:id` | Get single batch |
+| `POST` | `/resumes/:id/retry` | Retry failed upload |
+| `DELETE` | `/resumes/:id` | Delete upload |
+
+### Resume Screening
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/resume/screen` | Match parsed resume against a job's skill requirements |
+
+Request body:
 ```json
 {
-  "predicted_role": "Machine Learning Engineer",
-  "confidence": "94%",
-  "top_matches": [
-    "Machine Learning Engineer",
-    "Data Scientist",
-    "Backend Engineer"
-  ],
-  "extracted_skills": ["python", "tensorflow", "aws"],
-  "match_score": 0.15
+  "job_id": "uuid",
+  "resume_text": "...",
+  "parsed_resume": { "skills": [...], "totalExperienceYears": 3 }
 }
 ```
 
-### Example — File Upload
-
-```bash
-curl -X POST http://localhost:8000/api/v1/resume/screen/upload \
-  -F "file=@resume.pdf"
+Response matches `ResumeScreeningResult` type in frontend:
+```json
+{
+  "matchScore": 0.73,
+  "matchPercentage": 73.0,
+  "recommendation": "match",
+  "matchedSkills": ["python", "fastapi"],
+  "missingSkills": ["kubernetes"],
+  "experienceMatch": true,
+  "strengths": ["Matches 2/3 required skills"],
+  "gaps": [],
+  "summary": "Candidate matches 2/3 required skills (73% match). Recommendation: Match."
+}
 ```
 
-Supported formats: `.pdf`, `.txt`, `.docx` (max 5 MB).
+### Jobs
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/jobs` | List all jobs |
+| `GET` | `/jobs/:id` | Get single job |
+| `POST` | `/jobs` | Create job |
+| `PATCH` | `/jobs/:id` | Update job |
+| `DELETE` | `/jobs/:id` | Delete job |
+| `GET` | `/jobs/:id/candidates` | Candidates for a job |
+
+### Assessments
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/assessments` | List assessments |
+| `GET` | `/assessments/:id` | Get single assessment |
+| `POST` | `/assessments` | Create assessment |
+| `DELETE` | `/assessments/:id` | Delete assessment |
+| `POST` | `/assessments/assign` | Assign to candidates |
+| `GET` | `/assessments/assignments` | List assignments (filter by `candidate_id`, `assessment_id`) |
+
+### Analytics
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/analytics/metrics` | Dashboard KPIs |
+| `GET` | `/analytics/upload-trends?days=30` | Daily upload trend |
+| `GET` | `/analytics/score-distribution` | Score histogram |
+| `GET` | `/analytics/skills?limit=20` | Top skill frequencies |
+| `GET` | `/analytics/funnel` | Hiring funnel stages |
 
 ---
 
-## Configuration
+## What was Fixed
 
-All settings can be overridden with environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MODEL_DIR` | `ml_/saved_models` | Path to saved model artefacts |
-| `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `MAX_UPLOAD_SIZE_MB` | `5` | Maximum file upload size in MB |
-| `PORT` | `8000` | Port the server listens on |
-
-Set them in a `.env` file or pass via `-e` to Docker:
-
-```bash
-docker run -e LOG_LEVEL=DEBUG -e MODEL_DIR=/models -p 8000:8000 resume-screening-api
-```
-
----
-
-## ML Models
-
-The ensemble uses two independent classifiers:
-
-| Model | File | Description |
-|-------|------|-------------|
-| **TF-IDF + LogReg** | `tfidf_pipeline.pkl` | Fast, interpretable baseline |
-| **BiLSTM** | `bilstm_model.keras` | Deep sequence model for context |
-| Label encoder | `label_encoder.pkl` | Maps class indices to role names |
-| Tokenizer | `tokenizer.pkl` | Word index for BiLSTM input |
-
-Both models are optional — the API works with either or both present. The final prediction is the **average of class probabilities** across available models.
-
-To retrain, see [`ml_/training/resume_screening.py`](ml_/training/resume_screening.py).
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-Tests use mocked ML models — no model files are required to run the test suite.
-
----
-
-## Requirements
-
-- Python 3.11+
-- TensorFlow 2.15
-- See [`requirements.txt`](requirements.txt) for the full list
+| Area | Issue | Fix |
+|---|---|---|
+| Upload URLs | `/upload/resumes`, `/uploads` | Renamed to `/resumes/upload`, `/resumes/batches` |
+| Batch list URL | `/uploads` (no batches) | `/resumes/batches` |
+| Retry/delete URLs | `/uploads/:id/retry` | `/resumes/:id/retry`, `/resumes/:id` |
+| Query params | camelCase (`sortBy`, `jobId`, `minScore`, `pageSize`) | snake_case (`sort_by`, `job_id`, `min_score`, `page_size`) to match frontend |
+| Pagination response keys | `pageSize`/`totalPages` | `page_size`/`total_pages` (frontend `adaptPaginated()` handles both) |
+| `PATCH /auth/me` | Missing | Added — updates name/email |
+| `POST /auth/change-password` | Missing | Added — verifies current password, hashes new one |
+| `DELETE /assessments/:id` | Missing | Added |
+| `/resume/screen` response shape | Wrong shape (`predicted_role`, `confidence`, ...) | Returns `ResumeScreeningResult` shape (`matchScore`, `matchPercentage`, `matchedSkills`, etc.) |
+| Resume screening logic | No job context | Now loads job's `required_skills`/`preferred_skills`/`min_experience_years` from DB for real matching |
+| `assessmentResults` in candidate | Missing from serializer | Added as `[]` (populated via assessment assignments) |
+| `argon2-cffi` missing | `security.py` uses argon2 but it wasn't in `requirements.txt` | Added |
+| `psycopg2-binary` missing | Needed by Alembic sync driver | Added |

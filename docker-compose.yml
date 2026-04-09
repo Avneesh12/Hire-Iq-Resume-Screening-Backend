@@ -1,38 +1,98 @@
 version: "3.9"
 
 services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hireiq
+      POSTGRES_PASSWORD: hireiq_pass
+      POSTGRES_DB: hireiq
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hireiq -d hireiq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI ──────────────────────────────────────────────────────────────────
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-    image: resume-screening-api:latest
-    container_name: resume_screening_api
+    build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file: .env
     environment:
-      MODEL_DIR: ml_/saved_models
-      LOG_LEVEL: INFO
-      PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://hireiq:hireiq_pass@postgres:5432/hireiq
+      SYNC_DATABASE_URL: postgresql://hireiq:hireiq_pass@postgres:5432/hireiq
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
     volumes:
-      # Mount saved models from host (avoids rebuilding image when models change)
-      - ./ml_/saved_models:/app/ml_/saved_models:ro
-    restart: unless-stopped
+      - ./ml_:/app/ml_:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
 
-  # ── Optional: Swagger UI proxy (useful for local dev) ──────────────────────
-  # Uncomment if you want a standalone Swagger UI at http://localhost:8080
-  # swagger-ui:
-  #   image: swaggerapi/swagger-ui
-  #   ports:
-  #     - "8080:8080"
-  #   environment:
-  #     API_URL: http://api:8000/openapi.json
-  #   depends_on:
-  #     - api
+  # ── Celery worker ─────────────────────────────────────────────────────────────
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A app.workers.resume_processor.celery_app worker --loglevel=info --concurrency=4
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://hireiq:hireiq_pass@postgres:5432/hireiq
+      SYNC_DATABASE_URL: postgresql://hireiq:hireiq_pass@postgres:5432/hireiq
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./ml_:/app/ml_:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Celery Flower (task monitor — dev only) ───────────────────────────────────
+  flower:
+    image: mher/flower:2.0
+    restart: unless-stopped
+    command: celery flower --broker=redis://redis:6379/1 --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    profiles:
+      - dev   # only starts with: docker compose --profile dev up
+
+volumes:
+  postgres_data:
+  redis_data:
