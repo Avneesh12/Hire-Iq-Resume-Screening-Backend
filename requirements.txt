@@ -33,3 +33,4 @@ celery[redis]==5.4.0
 scikit-learn==1.5.0
 numpy==1.26.4
 joblib==1.4.2
+xgboost==2.0.3        # Lightweight ML alternative to TensorFlow (GPU-free)

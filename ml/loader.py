@@ -2,8 +2,6 @@ import os
 import pickle
 from pathlib import Path
 
-import tensorflow as tf
-
 from app.core.config import settings
 from app.core.logger import get_logger
 
@@ -16,14 +14,21 @@ def load_models() -> dict:
     """
     Load all ML artefacts from disk into memory (cached after first call).
 
+    Supports:
+        - TF-IDF + Logistic Regression (sklearn)
+        - XGBoost + TF-IDF (lightweight alternative to BiLSTM)
+        - BiLSTM + Tokenizer (TensorFlow — deprecated, use XGBoost instead)
+
     Loads:
-        - label_encoder.pkl   — always required
-        - tfidf_pipeline.pkl  — optional (skipped if missing)
-        - bilstm_model.keras  — optional (requires tokenizer.pkl too)
-        - tokenizer.pkl       — loaded alongside bilstm_model
+        - label_encoder.pkl       — always required
+        - tfidf_pipeline.pkl      — optional (sklearn baseline)
+        - xgboost_model.ubj       — optional (lightweight alternative)
+        - xgboost_vectorizer.pkl  — required if XGBoost model exists
+        - bilstm_model.keras      — optional (TensorFlow, not recommended)
+        - tokenizer.pkl           — loaded alongside bilstm_model
 
     Returns:
-        dict with keys: 'le', optionally 'tfidf', 'bilstm', 'tokenizer'
+        dict with keys: 'le', optionally 'tfidf', 'xgboost', 'xgb_vectorizer', 'bilstm', 'tokenizer'
 
     Raises:
         FileNotFoundError if label_encoder.pkl is missing.
@@ -51,20 +56,38 @@ def load_models() -> dict:
         else:
             logger.warning("tfidf_pipeline.pkl not found — skipping TF-IDF model.")
 
-        # ── BiLSTM + tokenizer — both must exist ──────────────────────────
+        # ── XGBoost + Vectorizer — lightweight alternative ────────────────
+        xgb_path = base / "xgboost_model.ubj"
+        xgb_vec_path = base / "xgboost_vectorizer.pkl"
+
+        if xgb_path.exists() and xgb_vec_path.exists():
+            try:
+                import xgboost as xgb
+                _models["xgboost"] = xgb.XGBClassifier()
+                _models["xgboost"].load_model(str(xgb_path))
+                with open(xgb_vec_path, "rb") as f:
+                    _models["xgb_vectorizer"] = pickle.load(f)
+                logger.info("Loaded: xgboost_model.ubj + xgboost_vectorizer.pkl (preferred lightweight model)")
+            except ImportError:
+                logger.warning("XGBoost not installed — install via: pip install xgboost")
+        else:
+            missing = [p.name for p in (xgb_path, xgb_vec_path) if not p.exists()]
+            logger.debug("XGBoost skipped — missing: %s", missing)
+
+        # ── BiLSTM + tokenizer — TensorFlow (deprecated) ────────────────
         bilstm_path = base / "bilstm_model.keras"
         tokenizer_path = base / "tokenizer.pkl"
 
         if bilstm_path.exists() and tokenizer_path.exists():
-            _models["bilstm"] = tf.keras.models.load_model(str(bilstm_path))
-            with open(tokenizer_path, "rb") as f:
-                _models["tokenizer"] = pickle.load(f)
-            logger.info("Loaded: bilstm_model.keras + tokenizer.pkl")
+            try:
+                _models["bilstm"] = tf.keras.models.load_model(str(bilstm_path))
+                with open(tokenizer_path, "rb") as f:
+                    _models["tokenizer"] = pickle.load(f)
+                logger.info("Loaded: bilstm_model.keras + tokenizer.pkl (deprecated — consider XGBoost instead)")
+            except ImportError:
+                logger.warning("TensorFlow not installed — skipping BiLSTM model")
         else:
-            missing = [
-                p.name for p in (bilstm_path, tokenizer_path) if not p.exists()
-            ]
-            logger.warning("BiLSTM skipped — missing: %s", missing)
+            logger.debug("BiLSTM skipped — missing files")
 
         logger.info("Models ready. Loaded keys: %s", list(_models.keys()))
         return _models

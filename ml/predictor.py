@@ -18,8 +18,12 @@ def predict(text: str, models: dict) -> dict:
     """
     Run ensemble prediction over all available models.
 
-    Uses TF-IDF and/or BiLSTM branches depending on which models are loaded.
-    Ensemble is a simple average of class probabilities.
+    Supports multiple backends:
+      1. XGBoost (preferred) — lightweight, no GPU needed
+      2. TF-IDF + Logistic Regression — baseline
+      3. BiLSTM (deprecated) — heavy, GPU-dependent
+
+    Ensemble uses simple average of class probabilities.
 
     Args:
         text:   Raw (uncleaned) resume text.
@@ -39,6 +43,23 @@ def predict(text: str, models: dict) -> dict:
     le = models["le"]
     probs: list[np.ndarray] = []
 
+    # ── XGBoost branch (PREFERRED — lightweight) ──────────────────────────────
+    if "xgboost" in models and "xgb_vectorizer" in models:
+        try:
+            X_tfidf = models["xgb_vectorizer"].transform([clean])
+            X_dense = X_tfidf.toarray()
+            prob = models["xgboost"].predict_proba(X_dense)[0]
+            probs.append(prob)
+            role_pred = le.inverse_transform([np.argmax(prob)])[0]
+            conf_pred = float(np.max(prob))
+            logger.debug(
+                "XGBoost (lightweight) → role=%s | confidence=%.4f",
+                role_pred,
+                conf_pred,
+            )
+        except Exception as e:
+            logger.warning("XGBoost prediction failed: %s", e)
+
     # ── TF-IDF branch ─────────────────────────────────────────────────────────
     if "tfidf" in models:
         prob = models["tfidf"].predict_proba([clean])[0]
@@ -49,22 +70,25 @@ def predict(text: str, models: dict) -> dict:
             float(np.max(prob)),
         )
 
-    # ── BiLSTM branch ─────────────────────────────────────────────────────────
+    # ── BiLSTM branch (DEPRECATED — heavy, GPU-dependent) ─────────────────────
     if "bilstm" in models and "tokenizer" in models:
-        sequences = models["tokenizer"].texts_to_sequences([clean])
-        padded = pad_sequences(sequences, maxlen=settings.MAX_LEN)
-        prob = models["bilstm"].predict(padded, verbose=0)[0]
-        probs.append(prob)
-        logger.debug(
-            "BiLSTM  → role=%s | confidence=%.4f",
-            le.inverse_transform([np.argmax(prob)])[0],
-            float(np.max(prob)),
-        )
+        try:
+            sequences = models["tokenizer"].texts_to_sequences([clean])
+            padded = pad_sequences(sequences, maxlen=settings.MAX_LEN)
+            prob = models["bilstm"].predict(padded, verbose=0)[0]
+            probs.append(prob)
+            logger.debug(
+                "BiLSTM  → role=%s | confidence=%.4f (deprecated)",
+                le.inverse_transform([np.argmax(prob)])[0],
+                float(np.max(prob)),
+            )
+        except Exception as e:
+            logger.warning("BiLSTM prediction failed: %s", e)
 
     if not probs:
         raise RuntimeError(
             "No models available for prediction. "
-            "Ensure at least one of tfidf_pipeline.pkl or bilstm_model.keras is loaded."
+            "Ensure at least one of: xgboost_model.ubj, tfidf_pipeline.pkl, or bilstm_model.keras is loaded."
         )
 
     # ── Ensemble average ───────────────────────────────────────────────────────
@@ -74,10 +98,11 @@ def predict(text: str, models: dict) -> dict:
     top3 = _top3_roles(avg, le)
 
     logger.info(
-        "Ensemble → role=%s | confidence=%.4f | top3=%s",
+        "Ensemble prediction → role=%s | confidence=%.4f | top3=%s | models_used=%d",
         role,
         conf,
         top3,
+        len(probs),
     )
 
     return {"role": role, "confidence": conf, "top3": top3}
